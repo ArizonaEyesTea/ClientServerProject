@@ -81,6 +81,21 @@ public class FileServer {
                         break;
                     case "UPLD":
                         System.out.println("Received Upload Command");
+                        length = dataIn.readInt();
+                        byte[] uploadFileNameBytes = new byte[length];
+                        dataIn.readFully(uploadFileNameBytes);
+                        String uploadFileName = new String(uploadFileNameBytes, StandardCharsets.UTF_8);
+                        long uploadFileSize = dataIn.readLong();
+
+                        Future<Boolean> uploadReturnCode = executor.submit(new UploadFile(uploadFileName,
+                                uploadFileSize, dataIn));
+                        if (uploadReturnCode.get()) {
+                            sendString(dataOut, "S");
+                            System.out.println("Successfully uploaded file: " + uploadFileName);
+                        } else {
+                            sendString(dataOut, "F");
+                            System.out.println("Failed to upload file: " + uploadFileName);
+                        }
                         break;
                     case "DOWN":
                         System.out.println("Received Download Command");
@@ -88,6 +103,14 @@ public class FileServer {
                         byte[] downloadFileNameBytes = new byte[length];
                         dataIn.readFully(downloadFileNameBytes);
                         String downloadFileName = new String(downloadFileNameBytes, StandardCharsets.UTF_8);
+
+                        Future<Boolean> downloadReturnCode = executor.submit(new DownloadFile(downloadFileName,
+                                dataOut));
+                        if (downloadReturnCode.get()) {
+                            System.out.println("Successfully sent file: " + downloadFileName);
+                        } else {
+                            System.out.println("Failed to send file: " + downloadFileName);
+                        }
                         break;
                     case "RENA":
                         System.out.println("Received Rename Command");
@@ -100,9 +123,11 @@ public class FileServer {
                         dataIn.readFully(newFileNameBytes);
                         String newFileName = new String(newFileNameBytes, StandardCharsets.UTF_8);
 
-                        Future<Boolean> renameReturnCode = executor.submit(new RenameFile(originalFileName, newFileName));
+                        Future<Boolean> renameReturnCode = executor.submit(new RenameFile(originalFileName,
+                                newFileName));
                         if (renameReturnCode.get()) {
-                            sendString(dataOut, "Successfully Renamed File: " + originalFileName + " to: " + newFileName);
+                            sendString(dataOut, "Successfully Renamed File: " + originalFileName + " to: " +
+                                    newFileName);
                             System.out.println("successfully renamed file: " + originalFileName);
                         } else {
                             sendString(dataOut, "Did not Successfully Rename File");
@@ -112,6 +137,78 @@ public class FileServer {
                 }
             } catch (Exception exception) {
                 exception.printStackTrace();
+            }
+        }
+    }
+
+    public static class UploadFile implements Callable<Boolean> {
+        private String fileName;
+        private long fileSize;
+        private DataInputStream dataIn;
+
+        public UploadFile(String fileName, long fileSize, DataInputStream dataIn) {
+            this.fileName = fileName;
+            this.fileSize = fileSize;
+            this.dataIn = dataIn;
+        }
+
+        public Boolean call() {
+            File folder = new File("ServerFiles");
+            folder.mkdirs();
+            File targetFile = new File(folder, fileName);
+
+            try (FileOutputStream fileOut = new FileOutputStream(targetFile)) {
+                byte[] buffer = new byte[4096];
+                long remaining = fileSize;
+
+                while (remaining > 0) {
+                    int n = dataIn.read(buffer, 0, (int) Math.min(buffer.length, remaining));
+                    if (n == -1) {
+                        return false;
+                    }
+                    fileOut.write(buffer, 0, n);
+                    remaining -= n;
+                }
+                return true;
+            } catch (Exception exception) {
+                exception.printStackTrace();
+                return false;
+            }
+        }
+    }
+
+    public static class DownloadFile implements Callable<Boolean> {
+        private String fileName;
+        private DataOutputStream dataOut;
+
+        public DownloadFile(String fileName, DataOutputStream dataOut) {
+            this.fileName = fileName;
+            this.dataOut = dataOut;
+        }
+
+        public Boolean call() {
+            File selectedFile = new File("ServerFiles/" + fileName);
+            try {
+                if (!selectedFile.isFile()) {
+                    sendString(dataOut, "F");
+                    return false;
+                }
+
+                sendString(dataOut, "S");
+                dataOut.writeLong(selectedFile.length());
+
+                try (FileInputStream fileIn = new FileInputStream(selectedFile)) {
+                    byte[] buffer = new byte[4096];
+                    int n;
+                    while ((n = fileIn.read(buffer)) != -1) {
+                        dataOut.write(buffer, 0, n);
+                    }
+                    dataOut.flush();
+                }
+                return true;
+            } catch (Exception exception) {
+                exception.printStackTrace();
+                return false;
             }
         }
     }
